@@ -64,7 +64,7 @@ with st.spinner("Sedang memuat database Alkitab dari server, mohon tunggu sebent
 # 2. Memuat model IndoBERT yang sudah dilatih dari Hugging Face Hub
 # PENTING: Ganti tulisan username/model-name di bawah ini dengan akun dan repositori Hugging Face Anda
 # Contoh: "william/indobert-bible-search"
-NAMA_MODEL_HF = "YesayaAlvinK/indobert-bible-search"
+NAMA_MODEL_HF = "sentence-transformers/all-MiniLM-L6-v2"
 
 @st.cache_resource
 def muat_model_ai():
