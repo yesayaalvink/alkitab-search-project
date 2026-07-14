@@ -11,14 +11,17 @@ from sentence_transformers import SentenceTransformer, util
 st.set_page_config(page_title="Pencarian Alkitab Semantik", layout="wide")
 
 # ==========================================
-# CRITICAL FIX 1: Inject HF_TOKEN to bypass rate limiting
-# This must be executed before any Hugging Face library calls
+# CRITICAL FIX: Inject HF Token strictly
+# If the token is missing, the app will stop immediately and tell you,
+# rather than hanging silently due to rate limits.
 # ==========================================
 try:
-    os.environ["HF_TOKEN"] = st.secrets["HF_TOKEN"]
-    os.environ["HUGGING_FACE_HUB_TOKEN"] = st.secrets["HF_TOKEN"]
-except Exception:
-    st.warning("Token Hugging Face tidak ditemukan di Secrets. Proses unduh mungkin terbatas.")
+    HF_TOKEN = st.secrets["HF_TOKEN"]
+    os.environ["HF_TOKEN"] = HF_TOKEN
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN
+except KeyError:
+    st.error("HF_TOKEN tidak ditemukan di Streamlit Secrets! Aplikasi tidak bisa mengunduh model.")
+    st.stop()
 
 # Limiting PyTorch threads to 1 to save server RAM
 torch.set_num_threads(1)
@@ -83,9 +86,10 @@ def muat_model():
     id_model = "YesayaAlvinK/indobert-bible-search"
     try:
         gc.collect()
-        # CRITICAL FIX 2: Use low_cpu_mem_usage to prevent RAM spikes during loading
+        # CRITICAL: Pass token explicitly and use low_cpu_mem_usage to prevent OOM crash
         model = SentenceTransformer(
             id_model, 
+            token=HF_TOKEN,
             device="cpu",
             model_kwargs={"low_cpu_mem_usage": True}
         )
@@ -100,7 +104,7 @@ def muat_model():
 def proses_vektor_ayat(_model, daftar_ayat):
     try:
         vektor_list = []
-        ukuran_batch = 2000  # Slightly smaller batch to protect Streamlit's 1GB RAM limit
+        ukuran_batch = 1500  # Smaller batch to strictly protect Streamlit's 1GB RAM limit
         total_ayat = len(daftar_ayat)
         
         progres_bar = st.progress(0.0)
@@ -117,7 +121,7 @@ def proses_vektor_ayat(_model, daftar_ayat):
             
         vektor_final_array = np.vstack(vektor_list)
         
-        # CRITICAL FIX 3: Use from_numpy to share memory instead of duplicating it
+        # Use from_numpy to share memory instead of duplicating it
         vektor_final_tensor = torch.from_numpy(vektor_final_array).float()
         
         # Clean up intermediate lists to free up RAM
@@ -125,7 +129,6 @@ def proses_vektor_ayat(_model, daftar_ayat):
         del vektor_list
         gc.collect()
         
-        # CRITICAL FIX 4: Return the correct variable name (was previously 'static_tensor')
         return vektor_final_tensor
     except Exception as e:
         st.error(f"Gagal memproses vektor ayat! Detail kesalahan: {e}")
@@ -136,7 +139,7 @@ status_data.warning("🔄 Step 1: Downloading and aligning all Bible data...")
 df_alkitab = siapkan_data()
 status_data.success("✅ Step 1: All three versions of Bible data successfully prepared!")
 
-status_model.warning("🔄 Step 2: Downloading IndoBERT model from Hugging Face...")
+status_model.warning("🔄 Step 2: Downloading IndoBERT model from Hugging Face... (Please wait 3-5 minutes)")
 model_ai = muat_model()
 status_model.success("✅ Step 2: IndoBERT model successfully loaded into memory!")
 
