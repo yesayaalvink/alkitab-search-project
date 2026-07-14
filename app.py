@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-import glob
 import gc
 import torch
 import numpy as np
@@ -11,20 +10,30 @@ from sentence_transformers import SentenceTransformer, util
 
 st.set_page_config(page_title="Pencarian Alkitab Semantik", layout="wide")
 
-# Membatasi utas kerja PyTorch menjadi 1 saja agar menghemat RAM server
+# ==========================================
+# CRITICAL FIX 1: Inject HF_TOKEN to bypass rate limiting
+# This must be executed before any Hugging Face library calls
+# ==========================================
+try:
+    os.environ["HF_TOKEN"] = st.secrets["HF_TOKEN"]
+    os.environ["HUGGING_FACE_HUB_TOKEN"] = st.secrets["HF_TOKEN"]
+except Exception:
+    st.warning("Token Hugging Face tidak ditemukan di Secrets. Proses unduh mungkin terbatas.")
+
+# Limiting PyTorch threads to 1 to save server RAM
 torch.set_num_threads(1)
 gc.collect()
 
 st.title("Mesin Pencari Alkitab Berbasis Makna")
 st.write("Aplikasi ini menggunakan model IndoBERT yang telah dilatih mandiri oleh Anda menggunakan metode Multiple Negatives Ranking Loss untuk menemukan ayat berdasarkan makna konteks secara berdampingan.")
 
-# Membuat penunjuk progres visual langsung di layar utama
+# Creating visual progress indicators on the main screen
 st.subheader("Status Inisialisasi Sistem:")
 status_data = st.empty()
 status_model = st.empty()
 status_vektor = st.empty()
 
-# 1. Pembersih Otomatis Berkas Kunci Hugging Face
+# 1. Hugging Face Lock File Auto-Cleaner
 hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
 if os.path.exists(hf_cache_dir):
     for root, dirs, files in os.walk(hf_cache_dir):
@@ -35,7 +44,7 @@ if os.path.exists(hf_cache_dir):
                 except:
                     pass
 
-# 2. Mengambil dan merapikan data secara otomatis
+# 2. Loading and preparing data automatically
 @st.cache_data(show_spinner=None)
 def siapkan_data():
     try:
@@ -68,73 +77,77 @@ def siapkan_data():
         st.error(f"Gagal menyiapkan data Alkitab! Detail kesalahan: {e}")
         raise e
 
-# 3. Memuat model langsung dari Hugging Face Hub dengan pembersihan memori awal
+# 3. Loading the model directly from Hugging Face Hub with memory optimization
 @st.cache_resource(show_spinner=None)
 def muat_model():
     id_model = "YesayaAlvinK/indobert-bible-search"
     try:
         gc.collect()
-        model = SentenceTransformer(id_model)
+        # CRITICAL FIX 2: Use low_cpu_mem_usage to prevent RAM spikes during loading
+        model = SentenceTransformer(
+            id_model, 
+            device="cpu",
+            model_kwargs={"low_cpu_mem_usage": True}
+        )
         gc.collect()
         return model
     except Exception as e:
         st.error(f"Gagal memuat model dari Hugging Face Hub! Detail kesalahan: {e}")
         raise e
 
-# 4. Mengubah seluruh ayat menjadi vektor matematika menggunakan metode BATCHING agar hemat RAM
+# 4. Encoding the entire corpus into mathematical vectors using BATCHING
 @st.cache_resource(show_spinner=None)
 def proses_vektor_ayat(_model, daftar_ayat):
     try:
         vektor_list = []
-        ukuran_batch = 3000
+        ukuran_batch = 2000  # Slightly smaller batch to protect Streamlit's 1GB RAM limit
         total_ayat = len(daftar_ayat)
         
-        # Membuat indikator progres visual di layar
         progres_bar = st.progress(0.0)
         
         for i in range(0, total_ayat, ukuran_batch):
             batch = daftar_ayat[i : i + ukuran_batch]
-            # Melakukan konversi tanpa mengubah menjadi tensor torch secara langsung agar hemat RAM
-            vektor_batch = _model.encode(batch, convert_to_tensor=False)
+            vektor_batch = _model.encode(batch, convert_to_tensor=False, show_progress_bar=False)
             vektor_list.append(vektor_batch)
             
-            # Membersihkan sampah memori setelah setiap batch selesai diproses
             gc.collect()
             
-            # Memperbarui status kemajuan di layar
             persen = min(1.0, (i + ukuran_batch) / total_ayat)
             progres_bar.progress(persen)
             
-        # Menggabungkan seluruh batch menjadi satu kesatuan array
         vektor_final_array = np.vstack(vektor_list)
         
-        # Mengubah hasil akhir menjadi bentuk tensor torch untuk kalkulasi kemiripan
-        vektor_final_tensor = torch.tensor(vektor_final_array)
+        # CRITICAL FIX 3: Use from_numpy to share memory instead of duplicating it
+        vektor_final_tensor = torch.from_numpy(vektor_final_array).float()
         
-        # Bersihkan memori akhir
+        # Clean up intermediate lists to free up RAM
+        del vektor_final_array
+        del vektor_list
         gc.collect()
+        
+        # CRITICAL FIX 4: Return the correct variable name (was previously 'static_tensor')
         return vektor_final_tensor
     except Exception as e:
         st.error(f"Gagal memproses vektor ayat! Detail kesalahan: {e}")
         raise e
 
-# Memulai eksekusi dengan pemantau status langsung pada layar
-status_data.warning("🔄 Langkah 1: Sedang mengunduh dan menyelaraskan seluruh data Alkitab...")
+# Executing initialization with live progress monitoring
+status_data.warning("🔄 Step 1: Downloading and aligning all Bible data...")
 df_alkitab = siapkan_data()
-status_data.success("✅ Langkah 1: Seluruh data Alkitab tiga versi berhasil disiapkan!")
+status_data.success("✅ Step 1: All three versions of Bible data successfully prepared!")
 
-status_model.warning("🔄 Langkah 2: Sedang mengunduh otak model IndoBERT dari Hugging Face...")
+status_model.warning("🔄 Step 2: Downloading IndoBERT model from Hugging Face...")
 model_ai = muat_model()
-status_model.success("✅ Langkah 2: Model IndoBERT berhasil dimuat ke dalam memori!")
+status_model.success("✅ Step 2: IndoBERT model successfully loaded into memory!")
 
-status_vektor.warning("🔄 Langkah 3: Sedang memproses tiga puluh satu ribu ayat menjadi vektor angka, proses bertahap berjalan...")
+status_vektor.warning("🔄 Step 3: Processing thirty-one thousand verses into numeric vectors, batch process running...")
 daftar_teks_tb = df_alkitab['teks_tb'].tolist()
 vektor_seluruh_ayat = proses_vektor_ayat(model_ai, daftar_teks_tb)
-status_vektor.success("✅ Langkah 3: Seluruh koordinat vektor Alkitab selesai diproses!")
+status_vektor.success("✅ Step 3: All Bible vector coordinates successfully processed!")
 
 st.write("---")
 
-# Membangun antarmuka penginputan pertanyaan
+# Building user input interface
 pertanyaan = st.text_input("Ketik pencarian Anda di sini, misalnya: saudara Yusuf melemparkan Yusuf ke dalam sumur lalu menjualnya")
 
 if st.button("Cari Ayat"):
