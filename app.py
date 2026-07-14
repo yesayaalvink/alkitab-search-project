@@ -8,35 +8,50 @@ from sentence_transformers import SentenceTransformer, util
 
 st.set_page_config(page_title="Pencarian Alkitab Semantik", layout="wide")
 
-# Mengambil dan merapikan data secara otomatis
+# 1. Pembersih Otomatis Berkas Kunci Hugging Face
+hf_cache_dir = os.path.expanduser("~/.cache/huggingface/hub")
+if os.path.exists(hf_cache_dir):
+    for root, dirs, files in os.walk(hf_cache_dir):
+        for file in files:
+            if file.endswith(".lock"):
+                try:
+                    os.remove(os.path.join(root, file))
+                except:
+                    pass
+
+# 2. Mengambil dan merapikan data secara otomatis (DIUBAH AGAR LEBIH CEPAT DAN AMAN)
 @st.cache_data(show_spinner="Sedang mengunduh dan merapikan data Alkitab...")
 def siapkan_data():
     try:
+        # Mengunduh TB dan VMD dari Kaggle (ini sudah berhasil dan aman)
         path_kaggle = kagglehub.dataset_download("williammulianto/indonesia-bible-tb")
         df_tb = pd.read_csv(os.path.join(path_kaggle, "tb.csv"))
         df_vmd = pd.read_csv(os.path.join(path_kaggle, "vmd.csv"))
 
-        # Menggunakan teknik Shallow Clone --depth 1 agar unduhan instan dalam 2 detik
-        if not os.path.exists("ayt"):
-            os.system("git clone --depth 1 https://github.com/sabdacode/ayt.git")
-        file_csv_ayt = glob.glob("ayt/**/*.csv", recursive=True)[0]
-        df_ayt = pd.read_csv(file_csv_ayt)
+        # Mengunduh AYT LANGSUNG dari tautan RAW GitHub tanpa git clone
+        st.write("Mengunduh data Alkitab Yang Terbuka...")
+        url_ayt_raw = "https://raw.githubusercontent.com/sabdacode/ayt/main/csv/ayt.csv"
+        df_ayt = pd.read_csv(url_ayt_raw)
 
+        # Membersihkan tag kotor pada teks AYT
         def bersihkan_teks(teks):
             if pd.isna(teks): return ""
             return re.sub(r'<[^>]*>', '', str(teks)).strip()
         df_ayt['text_clean'] = df_ayt['text'].apply(bersihkan_teks)
 
+        # Menyelaraskan nama kitab
         daftar_kitab_tb = df_tb['kitab'].unique()
         pemetaan_kitab = {i + 1: kitab for i, kitab in enumerate(daftar_kitab_tb)}
         df_ayt['kitab_standar'] = df_ayt['book'].map(pemetaan_kitab)
 
+        # Merapikan kolom
         tb_siap = df_tb[['kitab', 'pasal', 'ayat', 'firman']].rename(columns={'firman': 'teks_tb'})
         vmd_siap = df_vmd[['kitab', 'pasal', 'ayat', 'firman']].rename(columns={'firman': 'teks_vmd'})
         ayt_siap = df_ayt[['kitab_standar', 'chapter', 'verse', 'text_clean']].rename(
             columns={'kitab_standar': 'kitab', 'chapter': 'pasal', 'verse': 'ayat', 'text_clean': 'teks_ayt'}
         )
 
+        # Menggabungkan data
         df_gabung = pd.merge(tb_siap, vmd_siap, on=['kitab', 'pasal', 'ayat'], how='inner')
         df_final = pd.merge(df_gabung, ayt_siap, on=['kitab', 'pasal', 'ayat'], how='inner')
         return df_final
@@ -44,7 +59,7 @@ def siapkan_data():
         st.error(f"Gagal menyiapkan data Alkitab! Detail kesalahan: {e}")
         raise e
 
-# Memuat model langsung dari Hugging Face Hub Anda
+# 3. Memuat model langsung dari Hugging Face Hub
 @st.cache_resource(show_spinner="Sedang memuat otak kecerdasan buatan dari Hugging Face...")
 def muat_model():
     id_model = "YesayaAlvinK/indobert-bible-search"
@@ -55,7 +70,7 @@ def muat_model():
         st.error(f"Gagal memuat model dari Hugging Face Hub! Detail kesalahan: {e}")
         raise e
 
-# Mengubah seluruh ayat menjadi vektor matematika
+# 4. Mengubah seluruh ayat menjadi vektor matematika
 @st.cache_resource(show_spinner="Sedang memproses seluruh ayat menjadi vektor matematika (hanya dilakukan sekali)...")
 def proses_vektor_ayat(_model, daftar_ayat):
     try:
