@@ -3,10 +3,17 @@ import pandas as pd
 import re
 import os
 import glob
+import gc
+import torch
+import numpy as np
 import kagglehub
 from sentence_transformers import SentenceTransformer, util
 
 st.set_page_config(page_title="Pencarian Alkitab Semantik", layout="wide")
+
+# Membatasi utas kerja PyTorch menjadi 1 saja agar menghemat RAM server
+torch.set_num_threads(1)
+gc.collect()
 
 st.title("Mesin Pencari Alkitab Berbasis Makna")
 st.write("Aplikasi ini menggunakan model IndoBERT yang telah dilatih mandiri oleh Anda menggunakan metode Multiple Negatives Ranking Loss untuk menemukan ayat berdasarkan makna konteks secara berdampingan.")
@@ -61,22 +68,52 @@ def siapkan_data():
         st.error(f"Gagal menyiapkan data Alkitab! Detail kesalahan: {e}")
         raise e
 
-# 3. Memuat model langsung dari Hugging Face Hub
+# 3. Memuat model langsung dari Hugging Face Hub dengan pembersihan memori awal
 @st.cache_resource(show_spinner=None)
 def muat_model():
     id_model = "YesayaAlvinK/indobert-bible-search"
     try:
+        gc.collect()
         model = SentenceTransformer(id_model)
+        gc.collect()
         return model
     except Exception as e:
         st.error(f"Gagal memuat model dari Hugging Face Hub! Detail kesalahan: {e}")
         raise e
 
-# 4. Mengubah seluruh ayat menjadi vektor matematika
+# 4. Mengubah seluruh ayat menjadi vektor matematika menggunakan metode BATCHING agar hemat RAM
 @st.cache_resource(show_spinner=None)
 def proses_vektor_ayat(_model, daftar_ayat):
     try:
-        return _model.encode(daftar_ayat, show_progress_bar=True, convert_to_tensor=True)
+        vektor_list = []
+        ukuran_batch = 3000
+        total_ayat = len(daftar_ayat)
+        
+        # Membuat indikator progres visual di layar
+        progres_bar = st.progress(0.0)
+        
+        for i in range(0, total_ayat, ukuran_batch):
+            batch = daftar_ayat[i : i + ukuran_batch]
+            # Melakukan konversi tanpa mengubah menjadi tensor torch secara langsung agar hemat RAM
+            vektor_batch = _model.encode(batch, convert_to_tensor=False)
+            vektor_list.append(vektor_batch)
+            
+            # Membersihkan sampah memori setelah setiap batch selesai diproses
+            gc.collect()
+            
+            # Memperbarui status kemajuan di layar
+            persen = min(1.0, (i + ukuran_batch) / total_ayat)
+            progres_bar.progress(persen)
+            
+        # Menggabungkan seluruh batch menjadi satu kesatuan array
+        vektor_final_array = np.vstack(vektor_list)
+        
+        # Mengubah hasil akhir menjadi bentuk tensor torch untuk kalkulasi kemiripan
+        vektor_final_tensor = torch.tensor(vektor_final_array)
+        
+        # Bersihkan memori akhir
+        gc.collect()
+        return vektor_final_tensor
     except Exception as e:
         st.error(f"Gagal memproses vektor ayat! Detail kesalahan: {e}")
         raise e
@@ -90,7 +127,7 @@ status_model.warning("🔄 Langkah 2: Sedang mengunduh otak model IndoBERT dari 
 model_ai = muat_model()
 status_model.success("✅ Langkah 2: Model IndoBERT berhasil dimuat ke dalam memori!")
 
-status_vektor.warning("🔄 Langkah 3: Sedang memproses tiga puluh satu ribu ayat menjadi vektor angka, ini memakan waktu beberapa menit...")
+status_vektor.warning("🔄 Langkah 3: Sedang memproses tiga puluh satu ribu ayat menjadi vektor angka, proses bertahap berjalan...")
 daftar_teks_tb = df_alkitab['teks_tb'].tolist()
 vektor_seluruh_ayat = proses_vektor_ayat(model_ai, daftar_teks_tb)
 status_vektor.success("✅ Langkah 3: Seluruh koordinat vektor Alkitab selesai diproses!")
