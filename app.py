@@ -16,8 +16,9 @@ def siapkan_data():
         df_tb = pd.read_csv(os.path.join(path_kaggle, "tb.csv"))
         df_vmd = pd.read_csv(os.path.join(path_kaggle, "vmd.csv"))
 
+        # Menggunakan teknik Shallow Clone --depth 1 agar unduhan instan dalam 2 detik
         if not os.path.exists("ayt"):
-            os.system("git clone https://github.com/sabdacode/ayt.git")
+            os.system("git clone --depth 1 https://github.com/sabdacode/ayt.git")
         file_csv_ayt = glob.glob("ayt/**/*.csv", recursive=True)[0]
         df_ayt = pd.read_csv(file_csv_ayt)
 
